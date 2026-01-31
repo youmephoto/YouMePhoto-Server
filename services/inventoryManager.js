@@ -767,6 +767,9 @@ class FotoboxInventoryManager {
         updatedAt: booking.updated_at,
         productTitle: booking.product_title,
         variantTitle: booking.variant_title,
+        // Event code for app/slideshow access
+        eventCode: booking.event_code,
+        eventCodeExpiresAt: booking.event_code_expires_at,
         // Shipping information
         shippingStatus: booking.shipping_status || 'not_shipped',
         trackingNumber: booking.tracking_number,
@@ -897,10 +900,12 @@ class FotoboxInventoryManager {
         endDate,
         totalDays,
         bookingData.status || 'pending',
-        bookingData.orderId || null
+        bookingData.orderId || null,
+        bookingData.eventCode || null,
+        bookingData.eventCodeExpiresAt || null
       );
 
-      console.log(`[InventoryManager] ✓ Booking ${bookingData.bookingId} created in database (${startDate} - ${endDate}, ${totalDays} days)`);
+      console.log(`[InventoryManager] ✓ Booking ${bookingData.bookingId} created in database (${startDate} - ${endDate}, ${totalDays} days, event code: ${bookingData.eventCode || 'N/A'})`);
       return true;
     } catch (error) {
       console.error('Error creating booking in database:', error);

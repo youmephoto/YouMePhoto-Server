@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import FotoboxInventoryManager from './inventoryManager.js';
 import { getReservationExpiry, isReservationExpired } from '../utils/dateHelpers.js';
 import { sendReservationEmail, sendConfirmationEmail } from './emailService.js';
+import { generateEventCode } from '../utils/eventCodeGenerator.js';
 
 /**
  * Booking Status Konstanten
@@ -64,10 +65,29 @@ class BookingService {
 
       const bookingId = uuidv4();
 
+      // Generate unique event code for app/slideshow access
+      let eventCode;
+      try {
+        eventCode = await generateEventCode();
+      } catch (error) {
+        console.error('[BookingService] Failed to generate event code:', error);
+        return {
+          success: false,
+          message: 'Fehler beim Generieren des Event-Codes. Bitte erneut versuchen.',
+          error: error.message,
+        };
+      }
+
+      // Calculate expiration date (event date + 30 days)
+      const eventCodeExpiresAt = new Date(eventDate);
+      eventCodeExpiresAt.setDate(eventCodeExpiresAt.getDate() + 30);
+
       const productInfo = await this.getProductInfo(variantId);
 
       const bookingData = {
         bookingId,
+        eventCode,
+        eventCodeExpiresAt,
         productTitle: productInfo.productTitle,
         variantTitle: productInfo.variantTitle,
         customerEmail, // Lead Capture: Email speichern
@@ -82,6 +102,8 @@ class BookingService {
         success: true,
         booking: {
           id: bookingId,
+          eventCode,
+          eventCodeExpiresAt: eventCodeExpiresAt.toISOString(),
           variantId,
           eventDate,
           startDate: eventDate, // Multi-day support: startDate = eventDate for single day

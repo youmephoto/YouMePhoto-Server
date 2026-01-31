@@ -283,13 +283,13 @@ export const bookingsQueries = {
     `);
   },
 
-  async add(bookingId, variantGid, productTitle, variantTitle, customerEmail, customerName, eventDate, startDate, endDate, totalDays, status, orderId) {
+  async add(bookingId, variantGid, productTitle, variantTitle, customerEmail, customerName, eventDate, startDate, endDate, totalDays, status, orderId, eventCode = null, eventCodeExpiresAt = null) {
     return execute(`
       INSERT INTO bookings (
         booking_id, variant_gid, product_title, variant_title, customer_email, customer_name,
-        event_date, start_date, end_date, total_days, status, order_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-    `, [bookingId, variantGid, productTitle, variantTitle, customerEmail, customerName, eventDate, startDate, endDate, totalDays, status, orderId]);
+        event_date, start_date, end_date, total_days, status, order_id, event_code, event_code_expires_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    `, [bookingId, variantGid, productTitle, variantTitle, customerEmail, customerName, eventDate, startDate, endDate, totalDays, status, orderId, eventCode, eventCodeExpiresAt]);
   },
 
   async updateStatus(status, bookingId) {
@@ -302,6 +302,37 @@ export const bookingsQueries = {
 
   async delete(bookingId) {
     return execute('DELETE FROM bookings WHERE booking_id = $1', [bookingId]);
+  },
+
+  /**
+   * Get booking by event code (with expiration check for public access)
+   * Used by: Diashow, App
+   * Returns null if code is expired or doesn't exist
+   */
+  async getByEventCode(eventCode) {
+    return queryOne(`
+      SELECT
+        b.*,
+        o.order_id,
+        o.shipping_name, o.shipping_address1, o.shipping_address2,
+        o.shipping_city, o.shipping_province, o.shipping_country,
+        o.shipping_zip, o.shipping_phone
+      FROM bookings b
+      LEFT JOIN orders o ON b.order_id = o.shopify_order_id
+      WHERE b.event_code = $1
+        AND (b.event_code_expires_at IS NULL OR b.event_code_expires_at > NOW())
+    `, [eventCode]);
+  },
+
+  /**
+   * Get booking by event code (admin - no expiration check)
+   * Used by: Admin panel, Code generator (collision check)
+   * Returns booking even if code is expired
+   */
+  async getByEventCodeAdmin(eventCode) {
+    return queryOne(`
+      SELECT * FROM bookings WHERE event_code = $1
+    `, [eventCode]);
   },
 
   async getByDateRange(startDate, endDate) {
