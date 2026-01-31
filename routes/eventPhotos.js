@@ -18,6 +18,62 @@ import { bookingsQueries } from '../db/database-postgres.js';
 const router = express.Router();
 
 /**
+ * GET /api/events/:eventCode/metadata
+ * Returns event metadata (booking information)
+ *
+ * Response format:
+ * {
+ *   success: boolean,
+ *   data: {
+ *     id: string,
+ *     code: string,
+ *     name: string,
+ *     date: string,
+ *     customerName: string,
+ *     notes: string,
+ *     status: string,
+ *     expiresAt: string
+ *   }
+ * }
+ */
+router.get('/events/:eventCode/metadata', async (req, res) => {
+  const { eventCode } = req.params;
+
+  try {
+    // Get booking by event code (includes expiration check)
+    const booking = await bookingsQueries.getByEventCode(eventCode);
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event nicht gefunden oder abgelaufen',
+      });
+    }
+
+    // Return metadata
+    res.json({
+      success: true,
+      data: {
+        id: booking.booking_id,
+        code: booking.event_code,
+        name: booking.product_title || 'Event',
+        date: booking.event_date,
+        customerName: booking.customer_name || '',
+        notes: booking.notes || '',
+        status: booking.status,
+        expiresAt: booking.event_code_expires_at,
+      },
+    });
+  } catch (error) {
+    console.error('[EventPhotos] Error fetching metadata:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Event-Daten',
+    });
+  }
+});
+
+/**
  * GET /api/events/:eventCode/photos
  * Returns paginated photos for an event
  *
