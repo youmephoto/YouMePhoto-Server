@@ -13,7 +13,7 @@
  */
 
 import express from 'express';
-import { bookingsQueries } from '../db/index.js';
+import { bookingsQueries } from '../db/database-postgres.js';
 
 const router = express.Router();
 
