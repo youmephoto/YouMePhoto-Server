@@ -21,6 +21,7 @@ import ordersRoutes from './routes/orders.js';
 import photoStripsRoutes from './routes/photoStrips.js';
 import testPhotoStripsRoutes from './routes/testPhotoStrips.js';
 import configRoutes from './routes/config.js';
+import eventPhotosRoutes from './routes/eventPhotos.js';
 
 // Middleware Imports
 import {
@@ -196,6 +197,7 @@ app.use('/api/admin/calendar', calendarLimiter, calendarRoutes); // Moderate lim
 app.use('/api/admin/features', adminLimiter, featuresRoutes); // Feature management (admin)
 app.use('/api/admin/customers', adminLimiter, customersRoutes); // Customer management
 app.use('/api/admin/orders', adminLimiter, ordersRoutes); // Order management
+app.use('/api', apiLimiter, eventPhotosRoutes); // Event photos API (placeholder)
 app.use('/webhooks', webhookLimiter, webhooksRoutes); // Permissive for Shopify webhooks
 
 // Admin Panel SPA fallback (must be after API routes and static files)
