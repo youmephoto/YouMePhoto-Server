@@ -111,7 +111,7 @@ class DiscountSyncService {
     console.log(`[DiscountSyncService] Importing code: ${parsed.code}`);
 
     // Erstelle in lokaler DB
-    const result = discountCodeQueries.create(
+    const result = await discountCodeQueries.create(
       parsed.code,
       parsed.title,
       null, // description
@@ -128,16 +128,16 @@ class DiscountSyncService {
       'shopify_sync' // created_by
     );
 
-    const discountId = result.lastInsertRowid;
+    const discountId = result?.id || result?.lastInsertRowid;
 
     // Füge Produkt-Restrictions hinzu (falls vorhanden)
     if (!parsed.applies_to_all_products && parsed.variant_gids && parsed.variant_gids.length > 0) {
       for (const variantGid of parsed.variant_gids) {
         try {
-          discountCodeProductQueries.add(discountId, variantGid);
+          await discountCodeProductQueries.add(discountId, variantGid);
         } catch (error) {
           // Ignore duplicate errors
-          if (!error.message.includes('UNIQUE constraint')) {
+          if (!error.message.includes('UNIQUE constraint') && !error.message.includes('duplicate key')) {
             console.error(`[DiscountSyncService] Error adding product restriction:`, error.message);
           }
         }
@@ -145,7 +145,7 @@ class DiscountSyncService {
     }
 
     // Log sync
-    discountCodeSyncLogQueries.add(
+    await discountCodeSyncLogQueries.add(
       discountId,
       parsed.shopify_discount_id,
       'imported',
@@ -168,7 +168,7 @@ class DiscountSyncService {
     console.log(`[DiscountSyncService] Updating code: ${parsed.code}`);
 
     // Update lokale DB (Shopify ist Master)
-    discountCodeQueries.update(
+    await discountCodeQueries.update(
       parsed.title,
       localDiscount.description, // Keep local description
       parsed.value,
@@ -182,20 +182,20 @@ class DiscountSyncService {
     );
 
     // Update Sync timestamp
-    discountCodeQueries.updateSyncTime(localDiscount.id);
+    await discountCodeQueries.updateSyncTime(localDiscount.id);
 
     // Update Produkt-Restrictions (falls geändert)
     if (!parsed.applies_to_all_products) {
       // Remove all existing
-      discountCodeProductQueries.removeAll(localDiscount.id);
+      await discountCodeProductQueries.removeAll(localDiscount.id);
 
       // Add new ones
       if (parsed.variant_gids && parsed.variant_gids.length > 0) {
         for (const variantGid of parsed.variant_gids) {
           try {
-            discountCodeProductQueries.add(localDiscount.id, variantGid);
+            await discountCodeProductQueries.add(localDiscount.id, variantGid);
           } catch (error) {
-            if (!error.message.includes('UNIQUE constraint')) {
+            if (!error.message.includes('UNIQUE constraint') && !error.message.includes('duplicate key')) {
               console.error(`[DiscountSyncService] Error adding product restriction:`, error.message);
             }
           }
@@ -204,7 +204,7 @@ class DiscountSyncService {
     }
 
     // Log sync
-    discountCodeSyncLogQueries.add(
+    await discountCodeSyncLogQueries.add(
       localDiscount.id,
       parsed.shopify_discount_id,
       'updated',
@@ -260,10 +260,10 @@ class DiscountSyncService {
       console.log(`[DiscountSyncService] Marking code as deleted: ${discount.code}`);
 
       // Soft delete (Status auf 'deleted' setzen)
-      discountCodeQueries.updateStatus('deleted', discount.id);
+      await discountCodeQueries.updateStatus('deleted', discount.id);
 
       // Log sync
-      discountCodeSyncLogQueries.add(
+      await discountCodeSyncLogQueries.add(
         discount.id,
         discount.shopify_discount_id,
         'deleted',
@@ -299,7 +299,7 @@ class DiscountSyncService {
       }
 
       // Finde lokal
-      const localDiscount = discountCodeQueries.getByShopifyId(shopifyDiscountId);
+      const localDiscount = await discountCodeQueries.getByShopifyId(shopifyDiscountId);
 
       if (!localDiscount) {
         // Importieren
@@ -328,7 +328,7 @@ class DiscountSyncService {
   async validateSync() {
     console.log('[DiscountSyncService] 🔍 Validating sync status...');
 
-    const localDiscounts = discountCodeQueries.getAll();
+    const localDiscounts = await discountCodeQueries.getAll();
     const localWithShopifyId = localDiscounts.filter((d) => d.shopify_discount_id);
 
     const report = {

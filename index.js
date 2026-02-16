@@ -19,7 +19,6 @@ import featuresRoutes from './routes/features.js';
 import customersRoutes from './routes/customers.js';
 import ordersRoutes from './routes/orders.js';
 import photoStripsRoutes from './routes/photoStrips.js';
-import testPhotoStripsRoutes from './routes/testPhotoStrips.js';
 import configRoutes from './routes/config.js';
 import eventPhotosRoutes from './routes/eventPhotos.js';
 
@@ -35,7 +34,6 @@ import {
 // Service Imports
 import BookingService from './services/bookingService.js';
 import FotoboxInventoryManager from './services/inventoryManager.js';
-// BackupService is SQLite-only, conditionally imported below
 import shopifySync from './services/shopifySync.js';
 import { initializeCronJobs, stopCronJobs } from './services/cronService.js';
 
@@ -191,7 +189,6 @@ app.use('/api/inventory', apiLimiter, inventoryRoutes);
 app.use('/api/products', apiLimiter, productsRoutes);
 app.use('/api/photo-strips', apiLimiter, photoStripsRoutes); // Photo strip editor routes
 app.use('/api/templates', apiLimiter, photoStripsRoutes); // Template routes (shared with photo strips)
-app.use('/api/test', adminLimiter, testPhotoStripsRoutes); // Test routes (no database.js dependency)
 app.use('/api/admin', adminLimiter, adminRoutes); // Strict limit for admin
 app.use('/api/admin/calendar', calendarLimiter, calendarRoutes); // Moderate limit for calendar feeds
 app.use('/api/admin/features', adminLimiter, featuresRoutes); // Feature management (admin)
@@ -323,9 +320,6 @@ app.listen(PORT, async () => {
   }, CLEANUP_INTERVAL);
 
   console.log(`⏰ Periodic cleanup scheduled every ${CLEANUP_INTERVAL / 60000} minutes`);
-
-  // Note: BackupService is SQLite-only and not used with PostgreSQL
-  // PostgreSQL backups should be handled by Railway's built-in backup system
 
   // Start automatic Shopify product sync
   console.log('🔄 Starting Shopify product sync service...');

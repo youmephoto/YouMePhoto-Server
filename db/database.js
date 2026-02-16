@@ -1,17 +1,38 @@
 /**
  * Database Layer - PostgreSQL Only
  *
- * This file now directly re-exports everything from database-postgres.js
- * All SQLite support has been removed as the application now runs exclusively on PostgreSQL.
+ * Re-exports everything from database-postgres.js.
+ * Provides a SQLite-compatible `prepare()` wrapper for PostgreSQL queries.
  */
+
+import { pool } from './database-postgres.js';
 
 export * from './database-postgres.js';
 
-// For backwards compatibility, provide a prepare function
-// In PostgreSQL, we don't need to prepare statements the same way as SQLite
-// but some code may still call prepare() expecting a query string
+/**
+ * SQLite-compatible prepare() wrapper for PostgreSQL.
+ * Returns an object with .get() and .run() methods that execute
+ * parameterized queries against the PostgreSQL pool.
+ *
+ * @param {string} sql - SQL query string with $1, $2, ... placeholders
+ * @returns {{ get: Function, run: Function, all: Function }}
+ */
 export function prepare(sql) {
-  return sql;
+  return {
+    /** Returns the first row or null */
+    async get(...params) {
+      const result = await pool.query(sql, params);
+      return result.rows[0] || null;
+    },
+    /** Executes the query (INSERT/UPDATE/DELETE), returns result info */
+    async run(...params) {
+      const result = await pool.query(sql, params);
+      return { changes: result.rowCount, lastInsertRowid: result.rows[0]?.id };
+    },
+    /** Returns all matching rows */
+    async all(...params) {
+      const result = await pool.query(sql, params);
+      return result.rows;
+    },
+  };
 }
-
-console.log('[Database] Using PostgreSQL (SQLite support removed)');

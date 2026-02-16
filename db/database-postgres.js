@@ -1038,13 +1038,17 @@ export const discountCodeSyncLogQueries = {
 };
 
 /**
- * Transaction helper
+ * Transaction helper.
+ * Passes the client to the callback so queries run within the transaction.
+ *
+ * @param {(client: pg.PoolClient) => Promise<T>} fn - Callback receiving the transaction client
+ * @returns {Promise<T>} Result of the callback
  */
 export async function transaction(fn) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const result = await fn();
+    const result = await fn(client);
     await client.query('COMMIT');
     return result;
   } catch (error) {

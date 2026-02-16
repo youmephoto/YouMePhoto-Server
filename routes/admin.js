@@ -460,15 +460,15 @@ router.post('/login', async (req, res) => {
 
   try {
     // 1. Check failed login attempts (Account Lockout)
-    const MAX_ATTEMPTS = parseInt(process.env.MAX_LOGIN_ATTEMPTS);
-    const LOCKOUT_MINUTES = parseInt(process.env.LOCKOUT_DURATION_MINUTES);
+    const MAX_ATTEMPTS = parseInt(process.env.MAX_LOGIN_ATTEMPTS, 10) || 5;
+    const LOCKOUT_MINUTES = parseInt(process.env.LOCKOUT_DURATION_MINUTES, 10) || 15;
 
     const failedAttemptsQuery = await pool.query(`
       SELECT COUNT(*) as count, MAX(attempted_at) as last_attempt
       FROM failed_login_attempts
       WHERE (username = $1 OR ip_address = $2)
-        AND attempted_at > NOW() - INTERVAL '${LOCKOUT_MINUTES} minutes'
-    `, [username, clientIp]);
+        AND attempted_at > NOW() - ($3 || ' minutes')::INTERVAL
+    `, [username, clientIp, String(LOCKOUT_MINUTES)]);
 
     const attempts = failedAttemptsQuery.rows[0];
 
@@ -1268,8 +1268,8 @@ router.get('/bookings/:bookingId/order-status', requireJwtAuth, async (req, res)
     }
 
     // Check if order exists
-    const orderCheckQuery = prepare('SELECT id FROM orders WHERE shopify_order_id = ?');
-    const order = await orderCheckQuery(orderId);
+    const orderCheckResult = await pool.query('SELECT id FROM orders WHERE shopify_order_id = $1', [orderId]);
+    const order = orderCheckResult.rows[0];
 
     res.json({
       success: true,
@@ -1298,16 +1298,21 @@ router.delete('/bookings/cleanup', requireJwtAuth, async (req, res) => {
     console.log(`[Admin API] Cleaning up cancelled and pending bookings by ${req.user.username}`);
 
     // Get count before deletion
-    const countQuery = prepare('SELECT COUNT(*) as count FROM bookings WHERE status IN (?, ?)');
-    const beforeCount = await countQuery('cancelled', 'pending');
+    const countResult = await pool.query(
+      "SELECT COUNT(*) as count FROM bookings WHERE status IN ($1, $2)",
+      ['cancelled', 'pending']
+    );
+    const beforeCount = countResult.rows[0];
 
     console.log(`[Admin API] Found ${beforeCount.count} cancelled/pending bookings to delete`);
 
     // Delete all cancelled and pending bookings
-    const deleteQuery = prepare('DELETE FROM bookings WHERE status IN (?, ?)');
-    const result = await deleteQuery('cancelled', 'pending');
+    const deleteResult = await pool.query(
+      "DELETE FROM bookings WHERE status IN ($1, $2)",
+      ['cancelled', 'pending']
+    );
 
-    const deletedCount = result.rowCount;
+    const deletedCount = deleteResult.rowCount;
     console.log(`[Admin API] ✓ Deleted ${deletedCount} bookings`);
 
     res.json({
@@ -1408,8 +1413,8 @@ router.delete('/bookings/:bookingId', requireJwtAuth, async (req, res) => {
 
     if (orderId) {
       // Check if the order actually exists in the database
-      const orderCheckQuery = prepare('SELECT id FROM orders WHERE shopify_order_id = ?');
-      const order = await orderCheckQuery(orderId);
+      const orderCheckResult = await pool.query('SELECT id FROM orders WHERE shopify_order_id = $1', [orderId]);
+      const order = orderCheckResult.rows[0];
 
       if (order) {
         // Order exists - cannot delete booking directly
@@ -1455,18 +1460,17 @@ router.post('/customers/recalculate-stats', requireJwtAuth, async (req, res) => 
 
     // Reset all counts to 0
     console.log('[Admin API] Step 1: Resetting all customer counts to 0...');
-    const resetQuery = prepare(`
+    await pool.query(`
       UPDATE customers
       SET total_orders = 0,
           total_revenue = 0,
           updated_at = CURRENT_TIMESTAMP
     `);
-    await resetQuery();
     console.log('[Admin API] ✓ Step 1 complete');
 
     // Update counts based on actual orders (excluding cancelled/refunded)
     console.log('[Admin API] Step 2: Recalculating counts from actual orders...');
-    const updateQuery = prepare(`
+    await pool.query(`
       UPDATE customers
       SET total_orders = (
           SELECT COUNT(*)
@@ -1484,12 +1488,11 @@ router.post('/customers/recalculate-stats', requireJwtAuth, async (req, res) => 
         ),
         updated_at = CURRENT_TIMESTAMP
     `);
-    await updateQuery();
     console.log('[Admin API] ✓ Step 2 complete');
 
     // Get updated stats
     console.log('[Admin API] Step 3: Fetching updated customer stats...');
-    const selectQuery = prepare(`
+    const selectResult = await pool.query(`
       SELECT
         id,
         email,
@@ -1501,7 +1504,7 @@ router.post('/customers/recalculate-stats', requireJwtAuth, async (req, res) => 
       WHERE total_orders > 0 OR total_revenue > 0
       ORDER BY total_orders DESC
     `);
-    const updatedCustomers = await selectQuery();
+    const updatedCustomers = selectResult.rows;
 
     console.log(`[Admin API] ✓ Customer stats recalculated for ${updatedCustomers.length} customers`);
 
@@ -1630,28 +1633,19 @@ router.post('/photo-strips/create-test', requireJwtAuth, async (req, res) => {
     const expiryDate = new Date();
     expiryDate.setDate(expiryDate.getDate() + 30);
 
-    // Insert photo strip using database abstraction
-    const stmt = prepare(`
-      INSERT INTO photo_strips (
-        strip_id, booking_id, customer_email,
-        design_data, status, access_token, access_expires_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `);
-
     const defaultDesignData = JSON.stringify({
       version: '5.3.0',
       objects: [],
       background: '#ffffff'
     });
 
-    await stmt(      stripId,
-      bookingId,
-      email,
-      defaultDesignData,
-      'draft',
-      accessToken,
-      expiryDate.toISOString()
-    );
+    // Insert photo strip
+    await pool.query(`
+      INSERT INTO photo_strips (
+        strip_id, booking_id, customer_email,
+        design_data, status, access_token, access_expires_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [stripId, bookingId, email, defaultDesignData, 'draft', accessToken, expiryDate.toISOString()]);
 
     console.log('[TEST] Photo strip created successfully');
 
@@ -1959,29 +1953,19 @@ router.put('/customers/by-email/:email', requireJwtAuth, async (req, res) => {
     }
 
     // Update customer data
-    const updateQuery = prepare(`
+    await pool.query(`
       UPDATE customers
       SET
-        name = COALESCE(?, name),
-        phone = COALESCE(?, phone),
-        street = COALESCE(?, street),
-        street_number = COALESCE(?, street_number),
-        postal_code = COALESCE(?, postal_code),
-        city = COALESCE(?, city),
-        country = COALESCE(?, country),
+        name = COALESCE($1, name),
+        phone = COALESCE($2, phone),
+        street = COALESCE($3, street),
+        street_number = COALESCE($4, street_number),
+        postal_code = COALESCE($5, postal_code),
+        city = COALESCE($6, city),
+        country = COALESCE($7, country),
         updated_at = CURRENT_TIMESTAMP
-      WHERE email = ?
-    `);
-
-    await updateQuery(      name || null,
-      phone || null,
-      street || null,
-      street_number || null,
-      postal_code || null,
-      city || null,
-      country || null,
-      email
-    );
+      WHERE email = $8
+    `, [name || null, phone || null, street || null, street_number || null, postal_code || null, city || null, country || null, email]);
 
     res.json({ success: true, message: 'Customer data updated' });
   } catch (error) {

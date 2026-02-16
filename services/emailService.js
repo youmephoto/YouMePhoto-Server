@@ -11,6 +11,24 @@ import de from 'date-fns/locale/de/index.js';
  * - Erinnerungen und Updates
  */
 
+/**
+ * Escapes HTML special characters to prevent XSS in email templates.
+ * All user-provided data MUST be passed through this function before
+ * being interpolated into HTML email templates.
+ *
+ * @param {string} str - Untrusted string to escape
+ * @returns {string} HTML-safe string
+ */
+function escapeHtml(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 let transporter = null;
 
 /**
@@ -68,7 +86,7 @@ export async function sendReservationEmail(email, data) {
     const mailOptions = {
       from: process.env.SMTP_USER,
       to: email,
-      subject: `Fotobox Reservierung - ${productTitle}`,
+      subject: `Fotobox Reservierung - ${escapeHtml(productTitle)}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #333;">Ihre Fotobox ist reserviert! 📸</h2>
@@ -77,10 +95,10 @@ export async function sendReservationEmail(email, data) {
 
           <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h3 style="margin-top: 0;">Reservierungs-Details:</h3>
-            <p><strong>Produkt:</strong> ${productTitle}</p>
-            <p><strong>Event-Datum:</strong> ${formattedDate}</p>
-            <p><strong>Reservierungs-ID:</strong> ${bookingId}</p>
-            <p><strong>Reserviert bis:</strong> ${formattedExpiry} Uhr</p>
+            <p><strong>Produkt:</strong> ${escapeHtml(productTitle)}</p>
+            <p><strong>Event-Datum:</strong> ${escapeHtml(formattedDate)}</p>
+            <p><strong>Reservierungs-ID:</strong> ${escapeHtml(bookingId)}</p>
+            <p><strong>Reserviert bis:</strong> ${escapeHtml(formattedExpiry)} Uhr</p>
           </div>
 
           <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 8px; margin: 20px 0;">

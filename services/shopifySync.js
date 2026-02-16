@@ -99,18 +99,18 @@ class ShopifySync {
           const numericId = variant.id.split('/').pop();
 
           // Prüfe ob Variante bereits in DB existiert
-          const existing = variantInventoryQueries.getByVariantGid(variantGid);
+          const existing = await variantInventoryQueries.getByVariantGid(variantGid);
 
           if (existing) {
             // Variante existiert: Aktualisiere NUR Produktdaten, NICHT total_units
             const hasChanges =
               existing.product_title !== product.title ||
               existing.variant_title !== (variant.title || 'Standard') ||
-              existing.price !== variant.price;
+              String(existing.price) !== String(variant.price);
 
             if (hasChanges) {
               // UPDATE nur die Metadaten, total_units bleibt unverändert
-              variantInventoryQueries.updateMetadata(
+              await variantInventoryQueries.updateMetadata(
                 product.title,
                 variant.title || 'Standard',
                 variant.price,
