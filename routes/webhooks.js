@@ -43,9 +43,11 @@ router.post('/shopify/orders/create', express.raw({ type: 'application/json' }),
     console.log('Line Items:', orderData.line_items?.length);
 
     // Finde Fotobox Line Items mit Booking ID
+    // Zusatztag-Items (_additional_day: 'true') ausschließen - diese haben keine eigene Buchung
     const fotoboxItems = orderData.line_items.filter(item => {
       const bookingId = item.properties?.find(p => p.name === '_booking_id');
-      return bookingId !== undefined;
+      const isAdditionalDay = item.properties?.find(p => p.name === '_additional_day')?.value === 'true';
+      return bookingId !== undefined && !isAdditionalDay;
     });
 
     console.log('Fotobox Items found:', fotoboxItems.length);
@@ -53,7 +55,8 @@ router.post('/shopify/orders/create', express.raw({ type: 'application/json' }),
     // Bestätige jede Buchung
     for (const item of fotoboxItems) {
       const bookingId = item.properties.find(p => p.name === '_booking_id')?.value;
-      const eventDate = item.properties.find(p => p.name === '_event_date')?.value;
+      const eventDate = item.properties.find(p => p.name === '_event_date')?.value
+                     || item.properties.find(p => p.name === '_main_event_date')?.value;
 
       if (!bookingId) {
         console.warn('Line item missing _booking_id:', item.id);

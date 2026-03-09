@@ -65,13 +65,14 @@ class OrderService {
     console.log('[OrderService] Creating order from Shopify:', shopifyOrder.name);
 
     // 1. Get or create customer (OUTSIDE transaction, because it's async)
-    const customerData = shopifyOrder.customer;
+    const customerData = shopifyOrder.customer || {};
     const shippingAddress = shopifyOrder.shipping_address || {};
-    console.log('[OrderService] Getting/creating customer:', customerData.email);
+    const customerEmail = customerData.email || shopifyOrder.email || shopifyOrder.contact_email;
+    console.log('[OrderService] Getting/creating customer:', customerEmail);
     console.log('[OrderService] Shipping address:', JSON.stringify(shippingAddress, null, 2));
 
     const customer = await customerService.getOrCreateCustomer(
-      customerData.email,
+      customerEmail,
       {
         firstName: customerData.first_name || '',
         lastName: customerData.last_name || '',
