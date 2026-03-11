@@ -125,6 +125,8 @@ const staticOptions = {
 app.use('/admin', express.static(path.join(__dirname, '../admin-panel/dist'), staticOptions));
 app.use('/assets', express.static(path.join(__dirname, '../admin-panel/dist/assets'), staticOptions));
 app.use('/admin/assets', express.static(path.join(__dirname, '../admin-panel/dist/assets'), staticOptions));
+// Serve frontend assets (fonts, images) – falls through if not found in admin-panel/dist/assets
+app.use('/assets', express.static(path.join(__dirname, '../frontend/dist/assets'), staticOptions));
 
 // Body parsers (after static files)
 app.use(express.json());
