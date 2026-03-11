@@ -241,7 +241,7 @@ async function getProductInfo(variantId) {
 async function checkAlternativeColors(currentVariantId, startDate, endDate, availableDates) {
   try {
     // Import database queries
-    const { blockedDatesQueries, bookingsQueries, variantInventoryQueries } = await import('../db/database.js');
+    const { blockedDatesQueries, bookingsQueries, variantInventoryQueries, colorPoolQueries } = await import('../db/database.js');
 
     // 1. Hole das Produkt und alle seine Varianten (1 API call)
     const query = `
@@ -293,13 +293,20 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     // 3. Hole Admin-gesperrte Tage aus der Datenbank
     const allBlockedDates = await blockedDatesQueries.getAll();
 
-    // 4. PERFORMANCE: Lade ALLE Inventory-Daten EINMAL (statt für jede Variante einzeln)
-    const allInventory = await variantInventoryQueries.getAll();
+    // 4. PERFORMANCE: Lade Farb-Pool Inventar und Varianten-Farben EINMAL
+    const allColorPools = await colorPoolQueries.getAll();
+    const allVariantInventory = await variantInventoryQueries.getAll();
 
-    // Erstelle Map für schnellen Lookup: variantGid → inventory
-    const inventoryMap = new Map();
-    for (const inv of allInventory) {
-      inventoryMap.set(inv.variant_gid, inv);
+    // Map: variantGid → color
+    const variantColorMap = new Map();
+    for (const inv of allVariantInventory) {
+      if (inv.color) variantColorMap.set(inv.variant_gid, inv.color);
+    }
+
+    // Map: color → total_units (aus color_pools)
+    const colorPoolMap = new Map();
+    for (const pool of allColorPools) {
+      colorPoolMap.set(pool.color, pool.total_units);
     }
 
     // 3. Generiere alle Daten im Zeitraum
@@ -352,6 +359,9 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
 
       console.log(`[Alternative Check] ===== Checking date ${date} (${otherVariants.length} variants to check) =====`);
 
+      // Bereits geprüfte Farben merken (jede Farbe nur einmal auswerten)
+      const checkedColors = new Set();
+
       for (const variant of otherVariants) {
         // Extrahiere Farbe aus selectedOptions ZUERST für Debugging
         const colorOption = variant.selectedOptions.find(
@@ -361,19 +371,32 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
         );
         const altColor = colorOption?.value || variant.title;
 
-        // Filtere Buchungen für diese Variante (DB verwendet variant_gid statt variantId)
-        const variantBookings = allBookings.filter(b => b.variant_gid === variant.id);
+        // Normalisierte Farbe aus DB-Map
+        const normalizedColor = variantColorMap.get(variant.id);
 
-        // Hole Inventory aus Map (PERFORMANCE: kein DB-Query mehr!)
-        const dbInventory = inventoryMap.get(variant.id);
-        const totalInventory = dbInventory?.total_units || 0;
-
-        // Falls nicht in DB, überspringe diese Variante
-        if (!dbInventory) {
-          console.log(`[Alternative Check] ${altColor} - NO INVENTORY IN DB, skipping`);
+        // Falls Farbe nicht bekannt oder bereits geprüft → überspringen
+        if (!normalizedColor) {
+          console.log(`[Alternative Check] ${altColor} - color not set in DB, skipping`);
           continue;
         }
-        const blockedCount = variantBookings.filter(booking => {
+        if (checkedColors.has(normalizedColor)) {
+          console.log(`[Alternative Check] ${altColor} (${normalizedColor}) - already checked this color, skipping duplicate variant`);
+          continue;
+        }
+        checkedColors.add(normalizedColor);
+
+        // Hole Inventar aus Farb-Pool (PERFORMANCE: kein DB-Query mehr!)
+        const totalInventory = colorPoolMap.get(normalizedColor) ?? 0;
+
+        if (totalInventory === 0) {
+          console.log(`[Alternative Check] ${altColor} - NO COLOR POOL INVENTORY, skipping`);
+          continue;
+        }
+
+        // Filtere Buchungen für ALLE Varianten dieser Farbe
+        const colorBookings = allBookings.filter(b => variantColorMap.get(b.variant_gid) === normalizedColor);
+
+        const blockedCount = colorBookings.filter(booking => {
           // WICHTIG: Nur confirmed und reserved Bookings zählen (genau wie inventoryManager)
           // pending Bookings werden ignoriert, da sie noch nicht bestätigt sind
           if (booking.status !== 'confirmed' && booking.status !== 'reserved') return false;
@@ -397,13 +420,14 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
 
         const availableCount = totalInventory - blockedCount;
 
-        console.log(`[Alternative Check] ${altColor} (${variant.id}) - Total: ${totalInventory}, Blocked: ${blockedCount}, Available: ${availableCount}`);
+        console.log(`[Alternative Check] ${altColor} (${normalizedColor}) - Total: ${totalInventory}, Blocked: ${blockedCount}, Available: ${availableCount}`);
 
         if (availableCount > 0) {
           availableAlternatives.push({
             variantId: variant.id,
             variantTitle: variant.title,
             color: altColor,
+            normalizedColor,
             availableCount
           });
           console.log(`[Alternative Check] ✓ Added ${altColor} as alternative`);

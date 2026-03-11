@@ -12,6 +12,9 @@ import {
   variantInventoryQueries,
   inventoryHistoryQueries,
   inventoryScheduleQueries,
+  colorPoolQueries,
+  colorScheduleQueries,
+  colorInventoryHistoryQueries,
   adminUserQueries,
   blockedDatesQueries,
   customerQueries,
@@ -430,6 +433,178 @@ router.delete('/inventory/schedule/:scheduleId', requireJwtAuth, async (req, res
       error: 'Failed to delete inventory schedule',
       message: error.message,
     });
+  }
+});
+
+// ==========================================
+// COLOR INVENTORY ROUTES (Farb-Pool)
+// ==========================================
+
+/**
+ * GET /api/admin/color-inventory
+ *
+ * Gibt alle 4 Farb-Pools zurück (weiss, schwarz, rosa, mint)
+ */
+router.get('/color-inventory', requireJwtAuth, async (req, res) => {
+  try {
+    const colorPools = await colorPoolQueries.getAll();
+
+    res.json({
+      success: true,
+      colorPools,
+    });
+  } catch (error) {
+    console.error('[Admin API] Error fetching color inventory:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch color inventory', message: error.message });
+  }
+});
+
+/**
+ * PUT /api/admin/color-inventory/:color
+ *
+ * Aktualisiert die Anzahl der Fotoboxen für eine Farbe
+ */
+router.put('/color-inventory/:color', requireJwtAuth, async (req, res) => {
+  try {
+    const { color } = req.params;
+    const { totalUnits, reason } = req.body;
+
+    if (totalUnits === undefined || totalUnits < 0) {
+      return res.status(400).json({ success: false, error: 'totalUnits must be >= 0' });
+    }
+    if (!reason || reason.trim() === '') {
+      return res.status(400).json({ success: false, error: 'reason is required' });
+    }
+
+    const pool = await colorPoolQueries.getByColor(color);
+    if (!pool) {
+      return res.status(404).json({ success: false, error: 'Color not found' });
+    }
+
+    const oldQuantity = pool.total_units;
+    await colorPoolQueries.updateUnits(totalUnits, color);
+    await colorInventoryHistoryQueries.add(color, oldQuantity, totalUnits, 'admin', reason);
+
+    res.json({ success: true, message: 'Color inventory updated successfully' });
+  } catch (error) {
+    console.error('[Admin API] Error updating color inventory:', error);
+    res.status(500).json({ success: false, error: 'Failed to update color inventory', message: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/color-inventory/:color/history
+ *
+ * Gibt die Änderungshistorie für eine Farbe zurück
+ */
+router.get('/color-inventory/:color/history', requireJwtAuth, async (req, res) => {
+  try {
+    const { color } = req.params;
+    const history = await colorInventoryHistoryQueries.getByColor(color);
+
+    res.json({ success: true, history });
+  } catch (error) {
+    console.error('[Admin API] Error fetching color inventory history:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch history', message: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/color-inventory/:color/schedule
+ *
+ * Gibt alle Vorplanungs-Einträge für eine Farbe zurück
+ */
+router.get('/color-inventory/:color/schedule', requireJwtAuth, async (req, res) => {
+  try {
+    const { color } = req.params;
+    const schedules = await colorScheduleQueries.getByColor(color);
+
+    res.json({ success: true, schedules });
+  } catch (error) {
+    console.error('[Admin API] Error fetching color schedule:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch schedule', message: error.message });
+  }
+});
+
+/**
+ * POST /api/admin/color-inventory/:color/schedule
+ *
+ * Fügt einen neuen Vorplanungs-Eintrag für eine Farbe hinzu
+ */
+router.post('/color-inventory/:color/schedule', requireJwtAuth, async (req, res) => {
+  try {
+    const { color } = req.params;
+    const { effectiveDate, totalUnits, note } = req.body;
+
+    if (!effectiveDate) {
+      return res.status(400).json({ success: false, error: 'effectiveDate is required' });
+    }
+    if (totalUnits === undefined || totalUnits < 0) {
+      return res.status(400).json({ success: false, error: 'totalUnits must be >= 0' });
+    }
+
+    const colorPool = await colorPoolQueries.getByColor(color);
+    if (!colorPool) {
+      return res.status(404).json({ success: false, error: 'Color not found' });
+    }
+
+    await colorScheduleQueries.add(color, effectiveDate, totalUnits, note || null, 'admin');
+
+    res.json({ success: true, message: 'Color schedule added successfully' });
+  } catch (error) {
+    console.error('[Admin API] Error adding color schedule:', error);
+    res.status(500).json({ success: false, error: 'Failed to add color schedule', message: error.message });
+  }
+});
+
+/**
+ * PUT /api/admin/color-inventory/schedule/:scheduleId
+ *
+ * Aktualisiert einen Vorplanungs-Eintrag
+ */
+router.put('/color-inventory/schedule/:scheduleId', requireJwtAuth, async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    const { totalUnits, note } = req.body;
+
+    if (totalUnits === undefined || totalUnits < 0) {
+      return res.status(400).json({ success: false, error: 'totalUnits must be >= 0' });
+    }
+
+    const schedule = await colorScheduleQueries.getById(scheduleId);
+    if (!schedule) {
+      return res.status(404).json({ success: false, error: 'Schedule not found' });
+    }
+
+    await colorScheduleQueries.update(totalUnits, note || null, scheduleId);
+
+    res.json({ success: true, message: 'Color schedule updated successfully' });
+  } catch (error) {
+    console.error('[Admin API] Error updating color schedule:', error);
+    res.status(500).json({ success: false, error: 'Failed to update color schedule', message: error.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/color-inventory/schedule/:scheduleId
+ *
+ * Löscht einen Vorplanungs-Eintrag
+ */
+router.delete('/color-inventory/schedule/:scheduleId', requireJwtAuth, async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+
+    const schedule = await colorScheduleQueries.getById(scheduleId);
+    if (!schedule) {
+      return res.status(404).json({ success: false, error: 'Schedule not found' });
+    }
+
+    await colorScheduleQueries.delete(scheduleId);
+
+    res.json({ success: true, message: 'Color schedule deleted successfully' });
+  } catch (error) {
+    console.error('[Admin API] Error deleting color schedule:', error);
+    res.status(500).json({ success: false, error: 'Failed to delete color schedule', message: error.message });
   }
 });
 

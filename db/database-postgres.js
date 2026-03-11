@@ -300,6 +300,15 @@ export const bookingsQueries = {
     `, [status, bookingId]);
   },
 
+  async getByColor(color) {
+    return queryAll(`
+      SELECT b.* FROM bookings b
+      JOIN variant_inventory v ON b.variant_gid = v.variant_gid
+      WHERE v.color = $1 AND b.status != 'cancelled'
+      ORDER BY b.event_date ASC
+    `, [color]);
+  },
+
   async delete(bookingId) {
     return execute('DELETE FROM bookings WHERE booking_id = $1', [bookingId]);
   },
@@ -782,6 +791,105 @@ export const inventoryScheduleQueries = {
 
   async getById(id) {
     return queryOne('SELECT * FROM inventory_schedule WHERE id = $1', [id]);
+  },
+};
+
+/**
+ * Color Pool Queries
+ * Verwaltet physisches Fotobox-Inventar pro Farbe (unabhängig von Shopify-Varianten)
+ */
+export const colorPoolQueries = {
+  async getAll() {
+    return queryAll('SELECT * FROM color_pools ORDER BY color');
+  },
+
+  async getByColor(color) {
+    return queryOne('SELECT * FROM color_pools WHERE color = $1', [color]);
+  },
+
+  async updateUnits(totalUnits, color) {
+    return execute(`
+      UPDATE color_pools
+      SET total_units = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE color = $2
+    `, [totalUnits, color]);
+  },
+};
+
+/**
+ * Color Schedule Queries
+ * Zeitbasierte Vorplanung pro Farbe (z.B. "Ab Juni 7x Weiß")
+ */
+export const colorScheduleQueries = {
+  async getByColor(color) {
+    return queryAll(`
+      SELECT * FROM color_schedule
+      WHERE color = $1
+      ORDER BY effective_date ASC
+    `, [color]);
+  },
+
+  async getActiveForDate(color, date) {
+    return queryOne(`
+      SELECT * FROM color_schedule
+      WHERE color = $1 AND effective_date <= $2
+      ORDER BY effective_date DESC
+      LIMIT 1
+    `, [color, date]);
+  },
+
+  async getAll() {
+    return queryAll(`
+      SELECT s.*, p.display_name
+      FROM color_schedule s
+      JOIN color_pools p ON s.color = p.color
+      ORDER BY s.effective_date DESC
+    `);
+  },
+
+  async add(color, effectiveDate, totalUnits, note, createdBy) {
+    return execute(`
+      INSERT INTO color_schedule (color, effective_date, total_units, note, created_by)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [color, effectiveDate, totalUnits, note, createdBy]);
+  },
+
+  async update(totalUnits, note, id) {
+    return execute(`
+      UPDATE color_schedule
+      SET total_units = $1, note = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+    `, [totalUnits, note, id]);
+  },
+
+  async delete(id) {
+    return execute('DELETE FROM color_schedule WHERE id = $1', [id]);
+  },
+
+  async getById(id) {
+    return queryOne('SELECT * FROM color_schedule WHERE id = $1', [id]);
+  },
+};
+
+/**
+ * Color Inventory History Queries
+ * Audit-Trail für manuelle Inventar-Änderungen pro Farbe
+ */
+export const colorInventoryHistoryQueries = {
+  async add(color, oldQuantity, newQuantity, changedBy, reason) {
+    return execute(`
+      INSERT INTO color_inventory_history (color, old_quantity, new_quantity, changed_by, reason)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [color, oldQuantity, newQuantity, changedBy, reason]);
+  },
+
+  async getByColor(color) {
+    return queryAll(`
+      SELECT * FROM color_inventory_history
+      WHERE color = $1
+      ORDER BY changed_at DESC
+      LIMIT 50
+    `, [color]);
   },
 };
 

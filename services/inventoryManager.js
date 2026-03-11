@@ -1,5 +1,5 @@
 import shopifyClient from '../config/shopify.js';
-import { query, variantInventoryQueries, blockedDatesQueries, bookingsQueries, inventoryScheduleQueries } from '../db/database.js';
+import { query, variantInventoryQueries, blockedDatesQueries, bookingsQueries, inventoryScheduleQueries, colorPoolQueries, colorScheduleQueries } from '../db/database.js';
 import {
   calculateBlockedDates,
   calculateBlockedDatesForRange,
@@ -25,49 +25,66 @@ class FotoboxInventoryManager {
   }
 
   /**
-   * Holt die Gesamtanzahl der verfügbaren Einheiten für eine Variante
-   * UPDATED: Now uses local database instead of Shopify API
+   * Ermittelt die normalisierte Farbe für eine Variante aus der Datenbank
+   *
+   * @param {string} variantId - Shopify ProductVariant GID
+   * @returns {Promise<string|null>} Farbe ('weiss', 'schwarz', 'rosa', 'mint') oder null
+   */
+  async getColorFromVariant(variantId) {
+    try {
+      let inventory = await variantInventoryQueries.getByVariantGid(variantId);
+
+      if (!inventory && variantId.includes('/')) {
+        const numericId = variantId.split('/').pop();
+        inventory = await variantInventoryQueries.getByNumericId(numericId);
+      }
+
+      if (!inventory) {
+        console.warn(`[InventoryManager] ⚠️ Variant ${variantId} not found in DB — cannot determine color`);
+        return null;
+      }
+
+      if (!inventory.color) {
+        console.warn(`[InventoryManager] ⚠️ Variant ${variantId} has no color set (run migration 015)`);
+      }
+
+      return inventory.color || null;
+    } catch (error) {
+      console.error('[InventoryManager] Error fetching color from variant:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Holt die Gesamtanzahl der Fotoboxen für eine Variante (über Farb-Pool)
+   * DEPRECATED: Nur noch als Fallback verwendet — nutze getTotalInventoryForDate
    *
    * @param {string} variantId - Shopify ProductVariant GID
    * @returns {Promise<number>} Anzahl verfügbarer Einheiten
    */
   async getTotalInventory(variantId) {
     try {
-      console.log(`[InventoryManager] Looking up inventory for: ${variantId}`);
+      const color = await this.getColorFromVariant(variantId);
 
-      // Try to get from local database first
-      const inventory = await variantInventoryQueries.getByVariantGid(variantId);
-
-      if (inventory) {
-        console.log(`[InventoryManager] ✓ Found via GID: ${inventory.product_title} - ${inventory.variant_title}: ${inventory.total_units} units`);
-        return inventory.total_units;
-      }
-
-      // Fallback: Try numeric ID if GID not found
-      if (variantId.includes('/')) {
-        const numericId = variantId.split('/').pop();
-        console.log(`[InventoryManager] GID lookup failed, trying numeric ID: ${numericId}`);
-        const inventoryByNumeric = await variantInventoryQueries.getByNumericId(numericId);
-
-        if (inventoryByNumeric) {
-          console.log(`[InventoryManager] ✓ Found via numeric ID: ${inventoryByNumeric.product_title} - ${inventoryByNumeric.variant_title}: ${inventoryByNumeric.total_units} units`);
-          return inventoryByNumeric.total_units;
+      if (color) {
+        const pool = await colorPoolQueries.getByColor(color);
+        if (pool) {
+          console.log(`[InventoryManager] ✓ Color pool for '${color}': ${pool.total_units} units`);
+          return pool.total_units;
         }
       }
 
-      // If not in database, log warning and return 1 as default
-      console.warn(`[InventoryManager] ⚠️ Variant ${variantId} not found in database! Using default quantity: 1`);
-      console.warn(`[InventoryManager] Run migration script: node scripts/migrateInventory.js`);
+      console.warn(`[InventoryManager] ⚠️ No color pool found for variant ${variantId}, using default: 1`);
       return 1;
     } catch (error) {
-      console.error('[InventoryManager] Error fetching inventory from database:', error);
+      console.error('[InventoryManager] Error fetching inventory from color pool:', error);
       throw error;
     }
   }
 
   /**
    * Holt die Gesamtanzahl der verfügbaren Einheiten für eine Variante ZU EINEM BESTIMMTEN DATUM
-   * Berücksichtigt zeitbasiertes Inventar-Scheduling (inventory_schedule Tabelle)
+   * Berücksichtigt zeitbasiertes Inventar-Scheduling (color_schedule Tabelle)
    *
    * @param {string} variantId - Shopify ProductVariant GID
    * @param {string|Date} date - Datum für das Inventar abgefragt werden soll
@@ -76,19 +93,27 @@ class FotoboxInventoryManager {
   async getTotalInventoryForDate(variantId, date) {
     try {
       const formattedDate = formatDate(date);
+      const color = await this.getColorFromVariant(variantId);
 
-      // Prüfe ob es einen zeitbasierten Inventar-Plan gibt
-      const schedule = await inventoryScheduleQueries.getActiveForDate(variantId, formattedDate);
+      if (color) {
+        // Prüfe ob es einen zeitbasierten Inventar-Plan für diese Farbe gibt
+        const schedule = await colorScheduleQueries.getActiveForDate(color, formattedDate);
 
-      if (schedule) {
-        console.log(`[InventoryManager] ✓ Found scheduled inventory for ${formattedDate}: ${schedule.total_units} units (${schedule.note || 'no note'})`);
-        return schedule.total_units;
+        if (schedule) {
+          console.log(`[InventoryManager] ✓ Found color schedule for '${color}' on ${formattedDate}: ${schedule.total_units} units (${schedule.note || 'no note'})`);
+          return schedule.total_units;
+        }
+
+        // Fallback: Aktueller Farb-Pool Wert
+        const pool = await colorPoolQueries.getByColor(color);
+        if (pool) {
+          console.log(`[InventoryManager] No schedule for '${color}' on ${formattedDate}, using pool: ${pool.total_units} units`);
+          return pool.total_units;
+        }
       }
 
-      // Fallback: Verwende aktuelles Inventar
-      const currentInventory = await this.getTotalInventory(variantId);
-      console.log(`[InventoryManager] No schedule found for ${formattedDate}, using current inventory: ${currentInventory} units`);
-      return currentInventory;
+      console.warn(`[InventoryManager] ⚠️ No color pool found for variant ${variantId}, using default: 1`);
+      return 1;
     } catch (error) {
       console.error('[InventoryManager] Error fetching inventory for date:', error);
       throw error;
@@ -96,21 +121,73 @@ class FotoboxInventoryManager {
   }
 
   /**
+   * Holt alle Buchungen für eine Farbe (über ALLE Tier-Varianten dieser Farbe)
+   * Ersetzt getBookingsForVariant() für die Verfügbarkeitsberechnung
+   *
+   * @param {string} color - Normalisierte Farbe ('weiss', 'schwarz', 'rosa', 'mint')
+   * @returns {Promise<Array>} Array von Buchungsobjekten
+   */
+  async getBookingsForColor(color) {
+    try {
+      const bookings = await bookingsQueries.getByColor(color);
+
+      return bookings.map(booking => {
+        const startDate = booking.start_date || booking.event_date;
+        const endDate = booking.end_date || booking.event_date;
+
+        const blockedDates = calculateBlockedDatesForRange(
+          startDate,
+          endDate,
+          this.bufferBefore,
+          this.bufferAfter
+        );
+
+        return {
+          bookingId: booking.booking_id,
+          variantId: booking.variant_gid,
+          eventDate: booking.event_date,
+          startDate,
+          endDate,
+          totalDays: booking.total_days || 1,
+          status: booking.status,
+          customerEmail: booking.customer_email,
+          customerName: booking.customer_name,
+          orderId: booking.order_id,
+          createdAt: booking.created_at,
+          updatedAt: booking.updated_at,
+          blockedDates,
+        };
+      });
+    } catch (error) {
+      console.error('[InventoryManager] Error fetching bookings for color:', error);
+      return [];
+    }
+  }
+
+  /**
    * Holt alle Buchungen für eine Produktvariante aus lokaler Datenbank
+   * HINWEIS: Für Verfügbarkeitsberechnungen bitte getBookingsForColor() verwenden,
+   * da physisch alle Boxen gleich sind und farb-übergreifend gezählt werden müssen.
+   * Diese Methode wird nur noch intern für Extension/Confirmation genutzt (exclude-by-ID).
    *
    * @param {string} variantId - Shopify ProductVariant GID
    * @returns {Promise<Array>} Array von Buchungsobjekten
    */
   async getBookingsForVariant(variantId) {
     try {
+      // Hole Farbe der Variante und lade alle Buchungen dieser Farbe
+      const color = await this.getColorFromVariant(variantId);
+      if (color) {
+        return this.getBookingsForColor(color);
+      }
+
+      // Fallback: nur diese Variante (falls Farbe nicht ermittelbar)
       const bookings = await bookingsQueries.getByVariant(variantId);
 
-      // Transform database format to expected format
       return bookings.map(booking => {
         const startDate = booking.start_date || booking.event_date;
         const endDate = booking.end_date || booking.event_date;
 
-        // Use range-based calculation for multi-day bookings
         const blockedDates = calculateBlockedDatesForRange(
           startDate,
           endDate,
@@ -414,36 +491,35 @@ class FotoboxInventoryManager {
       minBookingDate.setHours(0, 0, 0, 0); // Auf Tagesbeginn setzen
       console.log(`[getAvailableDates] minBookingDate=${formatDate(minBookingDate)} (lead time: ${minLeadTimeDays} days)`);
 
-      // Optimierung: Lade Daten nur EINMAL statt für jeden Tag
-      // HINWEIS: totalInventory wird jetzt pro Tag berechnet (siehe unten)
-      const allBookings = await this.getBookingsForVariant(variantId);
-      console.log(`[getAvailableDates] Found ${allBookings.length} bookings for variant`);
+      // Farbe für diese Variante ermitteln
+      const color = await this.getColorFromVariant(variantId);
+
+      // PERFORMANCE: Lade alle Buchungen der Farbe EINMAL (alle Tier-Varianten)
+      const allBookings = color
+        ? await this.getBookingsForColor(color)
+        : await this.getBookingsForVariant(variantId);
+      console.log(`[getAvailableDates] Found ${allBookings.length} bookings for color '${color}'`);
 
       // Get blocked dates from database
       const allBlockedDates = await blockedDatesQueries.getAll();
 
-      // PERFORMANCE: Lade ALLE inventory schedules für diese Variante EINMAL
-      // statt für jeden Tag einzeln (59 Queries → 1 Query)
-      const allSchedules = await inventoryScheduleQueries.getByVariant(variantId);
+      // PERFORMANCE: Lade ALLE color schedules für diese Farbe EINMAL
+      const allSchedules = color
+        ? await colorScheduleQueries.getByColor(color)
+        : await inventoryScheduleQueries.getByVariant(variantId);
 
       // Cache für schnelleren Lookup: Map von Datum → total_units
-      const scheduleMap = new Map();
-      for (const schedule of allSchedules) {
-        const scheduleDate = new Date(schedule.effective_date);
-        const endDate = schedule.end_date ? new Date(schedule.end_date) : null;
+      // color_schedule hat nur effective_date (kein end_date) - jeder Eintrag gilt ab seinem Datum
+      // Wir bauen eine sortierte Liste und suchen den letzten passenden Eintrag
+      const sortedSchedules = [...allSchedules].sort((a, b) =>
+        a.effective_date < b.effective_date ? -1 : 1
+      );
 
-        // Generiere alle Daten im Schedule-Bereich
-        const currentDate = new Date(scheduleDate);
-        while (!endDate || currentDate <= endDate) {
-          scheduleMap.set(formatDate(currentDate), schedule.total_units);
-          if (!endDate) break; // Einmaliges Datum
-          currentDate.setDate(currentDate.getDate() + 1);
-        }
-      }
-
-      // Fallback: Hole aktuelles Inventar EINMAL
-      const defaultInventory = await this.getTotalInventory(variantId);
-      console.log(`[getAvailableDates] Default inventory for variant: ${defaultInventory} units`);
+      // Fallback: Hole aktuellen Farb-Pool Wert EINMAL
+      const defaultInventory = color
+        ? (await colorPoolQueries.getByColor(color))?.total_units ?? 1
+        : await this.getTotalInventory(variantId);
+      console.log(`[getAvailableDates] Default inventory for color '${color}': ${defaultInventory} units`);
 
       // Soft Lock: PENDING Bookings blockieren (konfigurierbar via ENV)
       const SOFT_LOCK_MINUTES = parseInt(process.env.SOFT_LOCK_MINUTES || '30');
@@ -501,8 +577,15 @@ class FotoboxInventoryManager {
         }
 
         // WICHTIG: Hole Inventar für DIESES SPEZIFISCHE DATUM
-        // Berücksichtigt zeitbasiertes Inventar-Scheduling (jetzt aus Cache!)
-        const totalInventoryForDate = scheduleMap.get(date) ?? defaultInventory;
+        // Suche den letzten color_schedule Eintrag, dessen effective_date <= date
+        let totalInventoryForDate = defaultInventory;
+        for (const schedule of sortedSchedules) {
+          if (schedule.effective_date <= date) {
+            totalInventoryForDate = schedule.total_units;
+          } else {
+            break;
+          }
+        }
 
         // Prüfe wie viele Boxen an diesem Tag BLOCKIERT sind
         // (d.h. wie viele bestehende Buchungen diesen Tag blockieren)
