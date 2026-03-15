@@ -264,13 +264,13 @@ class FotoboxInventoryManager {
       const totalInventory = await this.getTotalInventoryForDate(variantId, eventDate);
 
       // Berechne blocked dates OHNE Chain-Buffer für die Collision-Prüfung
-      // Chain-Buffer dient nur zur Anzeige, nicht zur Kollisionsprüfung
-      const { calculateBlockedDates: calculateBlockedDatesNoChain } = await import('../utils/dateHelpers.js');
-      const blockedDatesNoChain = calculateBlockedDatesNoChain(
+      // calculateBlockedDatesForRange mit gleichen Start+End = kein Chain-Buffer
+      const blockedDatesNoChain = calculateBlockedDatesForRange(
+        eventDate,
         eventDate,
         this.bufferBefore,
         this.bufferAfter
-      ).slice(0, -this.bufferBefore); // Entferne Chain-Buffer am Ende
+      );
 
       const allBookings = await this.getBookingsForVariant(variantId);
 
