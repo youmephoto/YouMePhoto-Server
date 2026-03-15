@@ -277,15 +277,6 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     const { product } = variantsResult;
     const allVariants = product.variants.nodes;
 
-    // Filtere andere Varianten (gleiche Kategorie, andere Farbe)
-    const otherVariants = allVariants.filter(v => v.id !== currentVariantId);
-
-    console.log(`[Alternative Check] Product: ${product.title}, variants: ${allVariants.length} total, ${otherVariants.length} others`);
-
-    if (otherVariants.length === 0) {
-      return {};
-    }
-
     // Vorlaufzeit berechnen (Sonntage überspringen)
     const minLeadTimeDays = parseInt(process.env.MIN_LEAD_TIME_DAYS || '4');
     const today = new Date();
@@ -296,6 +287,22 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     const variantColorMap = new Map();
     for (const inv of allVariantInventory) {
       if (inv.color) variantColorMap.set(inv.variant_gid, inv.color);
+    }
+
+    // Aktuelle Farbe bestimmen – alle Varianten gleicher Farbe ausschließen
+    const currentColor = variantColorMap.get(currentVariantId);
+    const otherVariants = allVariants.filter(v => {
+      if (v.id === currentVariantId) return false;
+      // Varianten der gleichen Farbe ausschließen (z.B. Weiß-Eco wenn aktuell Weiß-Premium)
+      const varColor = variantColorMap.get(v.id);
+      if (currentColor && varColor === currentColor) return false;
+      return true;
+    });
+
+    console.log(`[Alternative Check] Product: ${product.title}, variants: ${allVariants.length} total, ${otherVariants.length} other-color variants (current color: ${currentColor})`);
+
+    if (otherVariants.length === 0) {
+      return {};
     }
 
     // Map: color → total_units (aus color_pools)
