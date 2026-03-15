@@ -62,32 +62,25 @@ router.get("/", async (req, res) => {
       `[Availability] Fetching availability for variantId: ${variantId}, from ${startDate} to ${endDate}`
     );
 
-    // PERFORMANCE: Cache product info (changes rarely) but NOT availability (changes with every booking!)
+    // PERFORMANCE: Cache product info + variant list (ändern sich nie)
     const productInfoCacheKey = `productInfo:${variantId}`;
     let productInfo = cache.get(productInfoCacheKey);
 
-    if (!productInfo) {
-      productInfo = await getProductInfo(variantId);
-      cache.set(productInfoCacheKey, productInfo, 300); // 5 minutes - product info rarely changes
-    }
-
-    // PERFORMANCE: Parallel ausführen da unabhängig
-    console.log('[Availability] Fetching inventory + available dates in parallel...');
-    const [totalInventory, availableDates] = await Promise.all([
+    // PERFORMANCE: Alle unabhängigen Operationen parallel starten
+    // productInfo fetch + DB queries laufen gleichzeitig
+    const [resolvedProductInfo, totalInventory, availableDates] = await Promise.all([
+      productInfo
+        ? Promise.resolve(productInfo)
+        : getProductInfo(variantId).then(info => {
+            cache.set(productInfoCacheKey, info, 300);
+            return info;
+          }),
       inventoryManager.getTotalInventory(variantId),
-      inventoryManager.getAvailableDates(variantId, startDate, endDate)
+      inventoryManager.getAvailableDates(variantId, startDate, endDate),
     ]);
+    productInfo = resolvedProductInfo;
     console.log(`[Availability] Found ${availableDates.length} available dates`);
 
-    // Check alternative colors (OPTIMIZED: only 2-3 API calls instead of 180+)
-    console.log('[Availability] Calling checkAlternativeColors with:', {
-      variantId,
-      startDate,
-      endDate,
-      availableDatesCount: availableDates.length,
-      availableDatesFirst5: availableDates.slice(0, 5),
-      availableDatesLast5: availableDates.slice(-5),
-    });
     const alternativeAvailability = await checkAlternativeColors(
       variantId,
       startDate,
@@ -238,31 +231,50 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     // Import database queries
     const { blockedDatesQueries, bookingsQueries, variantInventoryQueries, colorPoolQueries } = await import('../db/database.js');
 
-    // 1. Hole das Produkt und alle seine Varianten (1 API call)
-    const query = `
-      query getProductVariants($id: ID!) {
-        productVariant(id: $id) {
-          id
-          product {
-            id
-            title
-            variants(first: 50) {
-              nodes {
-                id
-                title
-                selectedOptions {
-                  name
-                  value
+    // PERFORMANCE: Cache Varianten-Liste (ändert sich selten, 10 min TTL)
+    const variantsCacheKey = `variants:${currentVariantId}`;
+    let cachedVariants = cache.get(variantsCacheKey);
+
+    // PERFORMANCE: Shopify-Call + alle 4 DB-Queries parallel starten
+    const [variantsResult, allBookings, allBlockedDates, allColorPools, allVariantInventory] = await Promise.all([
+      cachedVariants
+        ? Promise.resolve(cachedVariants)
+        : (() => {
+            const q = `
+              query getProductVariants($id: ID!) {
+                productVariant(id: $id) {
+                  id
+                  product {
+                    id
+                    title
+                    variants(first: 50) {
+                      nodes {
+                        id
+                        title
+                        selectedOptions {
+                          name
+                          value
+                        }
+                      }
+                    }
+                  }
                 }
               }
-            }
-          }
-        }
-      }
-    `;
+            `;
+            return inventoryManager.shopify.graphql(q, { id: currentVariantId })
+              .then(res => {
+                const result = { product: res.productVariant.product };
+                cache.set(variantsCacheKey, result, 600); // 10 Minuten
+                return result;
+              });
+          })(),
+      bookingsQueries.getAll(),
+      blockedDatesQueries.getAll(),
+      colorPoolQueries.getAll(),
+      variantInventoryQueries.getAll(),
+    ]);
 
-    const response = await inventoryManager.shopify.graphql(query, { id: currentVariantId });
-    const product = response.productVariant.product;
+    const { product } = variantsResult;
     const allVariants = product.variants.nodes;
 
     // Filtere andere Varianten (gleiche Kategorie, andere Farbe)
@@ -271,25 +283,14 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     console.log(`[Alternative Check] Product: ${product.title}, variants: ${allVariants.length} total, ${otherVariants.length} others`);
 
     if (otherVariants.length === 0) {
-      console.log(`[Alternative Check] No other variants found, returning empty`);
-      return {}; // Keine Alternativen verfügbar
+      return {};
     }
 
-    // FIX: Vorlaufzeit berechnen (gleiche Logik wie in inventoryManager)
+    // Vorlaufzeit berechnen
     const minLeadTimeDays = parseInt(process.env.MIN_LEAD_TIME_DAYS || '4');
     const minBookingDate = new Date();
     minBookingDate.setDate(minBookingDate.getDate() + minLeadTimeDays);
     minBookingDate.setHours(0, 0, 0, 0);
-
-    // 2. PERFORMANCE: Hole ALLE Daten EINMAL am Anfang (statt N+1 Queries)
-    const allBookings = await bookingsQueries.getAll();
-
-    // 3. Hole Admin-gesperrte Tage aus der Datenbank
-    const allBlockedDates = await blockedDatesQueries.getAll();
-
-    // 4. PERFORMANCE: Lade Farb-Pool Inventar und Varianten-Farben EINMAL
-    const allColorPools = await colorPoolQueries.getAll();
-    const allVariantInventory = await variantInventoryQueries.getAll();
 
     // Map: variantGid → color
     const variantColorMap = new Map();
@@ -314,6 +315,10 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     // Finde Daten die für aktuelle Farbe NICHT verfügbar sind
     const unavailableDates = allDates.filter(date => !availableDates.includes(date));
     console.log(`[Alternative Check] ${allDates.length} dates total, ${availableDates.length} available, ${unavailableDates.length} to check for alternatives`);
+
+    // Buffer einmal lesen (nicht in jeder Schleife)
+    const bufferBefore = parseInt(process.env.SHIPPING_BUFFER_BEFORE || '2');
+    const bufferAfter = parseInt(process.env.SHIPPING_BUFFER_AFTER || '2');
 
     // 4. Berechne Verfügbarkeit für alle Varianten serverseitig
     const alternatives = {};
@@ -366,10 +371,6 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
 
           const eventDate = new Date(booking.event_date); // DB column name
           const checkDate = new Date(date);
-
-          // Prüfe ob Datum in gesperrtem Zeitraum liegt (mit Buffer + Chain-Buffer)
-          const bufferBefore = parseInt(process.env.SHIPPING_BUFFER_BEFORE || '2');
-          const bufferAfter = parseInt(process.env.SHIPPING_BUFFER_AFTER || '2');
 
           const blockedStart = new Date(eventDate);
           blockedStart.setDate(blockedStart.getDate() - bufferBefore);
