@@ -71,17 +71,12 @@ router.get("/", async (req, res) => {
       cache.set(productInfoCacheKey, productInfo, 300); // 5 minutes - product info rarely changes
     }
 
-    // Optimierung: Daten nur einmal laden
-    const totalInventory = await inventoryManager.getTotalInventory(variantId);
-
-    // Verfügbare Daten abrufen (verwendet intern auch getTotalInventory,
-    // aber wir können das später cachen wenn nötig)
-    console.log('[Availability] Fetching available dates...');
-    const availableDates = await inventoryManager.getAvailableDates(
-      variantId,
-      startDate,
-      endDate
-    );
+    // PERFORMANCE: Parallel ausführen da unabhängig
+    console.log('[Availability] Fetching inventory + available dates in parallel...');
+    const [totalInventory, availableDates] = await Promise.all([
+      inventoryManager.getTotalInventory(variantId),
+      inventoryManager.getAvailableDates(variantId, startDate, endDate)
+    ]);
     console.log(`[Availability] Found ${availableDates.length} available dates`);
 
     // Check alternative colors (OPTIMIZED: only 2-3 API calls instead of 180+)
@@ -273,8 +268,7 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     // Filtere andere Varianten (gleiche Kategorie, andere Farbe)
     const otherVariants = allVariants.filter(v => v.id !== currentVariantId);
 
-    console.log(`[Alternative Check] Product: ${product.title}, Total variants: ${allVariants.length}, Other variants: ${otherVariants.length}`);
-    console.log(`[Alternative Check] Current variant: ${currentVariantId}`);
+    console.log(`[Alternative Check] Product: ${product.title}, variants: ${allVariants.length} total, ${otherVariants.length} others`);
 
     if (otherVariants.length === 0) {
       console.log(`[Alternative Check] No other variants found, returning empty`);
@@ -310,23 +304,16 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     }
 
     // 3. Generiere alle Daten im Zeitraum
-    console.log(`[Alternative Check] Date range parameters: startDate="${startDate}", endDate="${endDate}"`);
     const allDates = [];
     const start = new Date(startDate);
     const end = new Date(endDate);
-    console.log(`[Alternative Check] Parsed dates: start=${start.toISOString()}, end=${end.toISOString()}`);
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       allDates.push(formatDate(d));
     }
-    console.log(`[Alternative Check] Generated allDates (first 5):`, allDates.slice(0, 5));
-    console.log(`[Alternative Check] Generated allDates (last 5):`, allDates.slice(-5));
 
     // Finde Daten die für aktuelle Farbe NICHT verfügbar sind
     const unavailableDates = allDates.filter(date => !availableDates.includes(date));
-    console.log(`[Alternative Check] availableDates array (first 5):`, availableDates.slice(0, 5));
-
-    console.log(`[Alternative Check] Total dates in range: ${allDates.length}, Available for current variant: ${availableDates.length}, Unavailable: ${unavailableDates.length}`);
-    console.log(`[Alternative Check] Unavailable dates to check:`, unavailableDates);
+    console.log(`[Alternative Check] ${allDates.length} dates total, ${availableDates.length} available, ${unavailableDates.length} to check for alternatives`);
 
     // 4. Berechne Verfügbarkeit für alle Varianten serverseitig
     const alternatives = {};
@@ -342,22 +329,9 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
       });
 
       // Wenn Admin-gesperrt, keine Alternativen anzeigen
-      if (isAdminBlocked) {
-        console.log(`[Alternative Check] Date ${date} is admin-blocked, skipping alternatives`);
-        continue;
-      }
-
-      // WICHTIG: Vorlaufzeit-Prüfung für Alternativen
-      // Wenn das Datum in der Vergangenheit oder zu nah liegt, zeige trotzdem Alternativen
-      // (Der Kalender zeigt es bereits als "unavailable" - Alternativen sind die einzige Option)
-      const isWithinLeadTime = checkDate < minBookingDate;
-      if (isWithinLeadTime) {
-        console.log(`[Alternative Check] Date ${date} is within lead time - will show alternatives anyway`);
-      }
+      if (isAdminBlocked) continue;
 
       const availableAlternatives = [];
-
-      console.log(`[Alternative Check] ===== Checking date ${date} (${otherVariants.length} variants to check) =====`);
 
       // Bereits geprüfte Farben merken (jede Farbe nur einmal auswerten)
       const checkedColors = new Set();
@@ -375,23 +349,12 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
         const normalizedColor = variantColorMap.get(variant.id);
 
         // Falls Farbe nicht bekannt oder bereits geprüft → überspringen
-        if (!normalizedColor) {
-          console.log(`[Alternative Check] ${altColor} - color not set in DB, skipping`);
-          continue;
-        }
-        if (checkedColors.has(normalizedColor)) {
-          console.log(`[Alternative Check] ${altColor} (${normalizedColor}) - already checked this color, skipping duplicate variant`);
-          continue;
-        }
+        if (!normalizedColor || checkedColors.has(normalizedColor)) continue;
         checkedColors.add(normalizedColor);
 
         // Hole Inventar aus Farb-Pool (PERFORMANCE: kein DB-Query mehr!)
         const totalInventory = colorPoolMap.get(normalizedColor) ?? 0;
-
-        if (totalInventory === 0) {
-          console.log(`[Alternative Check] ${altColor} - NO COLOR POOL INVENTORY, skipping`);
-          continue;
-        }
+        if (totalInventory === 0) continue;
 
         // Filtere Buchungen für ALLE Varianten dieser Farbe
         const colorBookings = allBookings.filter(b => variantColorMap.get(b.variant_gid) === normalizedColor);
@@ -420,8 +383,6 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
 
         const availableCount = totalInventory - blockedCount;
 
-        console.log(`[Alternative Check] ${altColor} (${normalizedColor}) - Total: ${totalInventory}, Blocked: ${blockedCount}, Available: ${availableCount}`);
-
         if (availableCount > 0) {
           availableAlternatives.push({
             variantId: variant.id,
@@ -430,19 +391,15 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
             normalizedColor,
             availableCount
           });
-          console.log(`[Alternative Check] ✓ Added ${altColor} as alternative`);
         }
       }
 
       if (availableAlternatives.length > 0) {
         alternatives[date] = availableAlternatives;
-        console.log(`[Alternative Check] ✓ Found ${availableAlternatives.length} alternatives for ${date}`);
-      } else {
-        console.log(`[Alternative Check] ✗ No alternatives found for ${date}`);
       }
     }
 
-    console.log(`[Alternative Check] Final alternatives object:`, JSON.stringify(alternatives, null, 2));
+    console.log(`[Alternative Check] Done: ${Object.keys(alternatives).length} dates with alternatives`);
     return alternatives;
   } catch (error) {
     console.error('[Alternative Check] ERROR checking alternative colors:', error);
