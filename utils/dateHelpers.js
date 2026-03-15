@@ -7,7 +7,38 @@ import {
   isAfter,
   isBefore,
   isEqual,
+  getDay,
 } from 'date-fns';
+
+/**
+ * Addiert N Nicht-Sonntage zu einem Datum (Sonntage werden übersprungen)
+ * @param {Date} date - Startdatum
+ * @param {number} days - Anzahl Tage (ohne Sonntage)
+ * @returns {Date}
+ */
+export function addDaysSkipSundays(date, days) {
+  if (days === 0) return date;
+  const direction = days > 0 ? 1 : -1;
+  let remaining = Math.abs(days);
+  let current = new Date(date);
+  while (remaining > 0) {
+    current = addDays(current, direction);
+    if (getDay(current) !== 0) { // 0 = Sonntag
+      remaining--;
+    }
+  }
+  return current;
+}
+
+/**
+ * Subtrahiert N Nicht-Sonntage von einem Datum (Sonntage werden übersprungen)
+ * @param {Date} date - Startdatum
+ * @param {number} days - Anzahl Tage
+ * @returns {Date}
+ */
+export function subDaysSkipSundays(date, days) {
+  return addDaysSkipSundays(date, -days);
+}
 
 /**
  * Berechnet geblockte Daten für ein Event basierend auf Buffer-Zeiten
@@ -30,10 +61,10 @@ import {
 export function calculateBlockedDates(eventDate, bufferBefore = 2, bufferAfter = 2) {
   const date = typeof eventDate === 'string' ? parseISO(eventDate) : eventDate;
 
-  const start = subDays(date, bufferBefore);
+  const start = subDaysSkipSundays(date, bufferBefore);
   // Chain-Buffer: Am Ende nochmal bufferBefore Tage anhängen
   // Damit nachfolgende Buchungen genug Platz für ihren BUFFER_BEFORE haben
-  const end = addDays(date, bufferAfter + bufferBefore);
+  const end = addDaysSkipSundays(date, bufferAfter + bufferBefore);
 
   const days = eachDayOfInterval({ start, end });
 
@@ -63,9 +94,9 @@ export function calculateBlockedDatesForRange(startDate, endDate, bufferBefore =
   const start = typeof startDate === 'string' ? parseISO(startDate) : startDate;
   const end = typeof endDate === 'string' ? parseISO(endDate) : endDate;
 
-  const blockedStart = subDays(start, bufferBefore);
+  const blockedStart = subDaysSkipSundays(start, bufferBefore);
   // Chain-Buffer: Am Ende nochmal bufferBefore Tage anhängen
-  const blockedEnd = addDays(end, bufferAfter + bufferBefore);
+  const blockedEnd = addDaysSkipSundays(end, bufferAfter + bufferBefore);
 
   const days = eachDayOfInterval({ start: blockedStart, end: blockedEnd });
 

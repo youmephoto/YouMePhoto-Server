@@ -1,6 +1,6 @@
 import express from "express";
 import FotoboxInventoryManager from "../services/inventoryManager.js";
-import { formatDate } from "../utils/dateHelpers.js";
+import { formatDate, addDaysSkipSundays } from "../utils/dateHelpers.js";
 import cache from "../utils/cache.js";
 
 const router = express.Router();
@@ -286,11 +286,11 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
       return {};
     }
 
-    // Vorlaufzeit berechnen
+    // Vorlaufzeit berechnen (Sonntage überspringen)
     const minLeadTimeDays = parseInt(process.env.MIN_LEAD_TIME_DAYS || '4');
-    const minBookingDate = new Date();
-    minBookingDate.setDate(minBookingDate.getDate() + minLeadTimeDays);
-    minBookingDate.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const minBookingDate = addDaysSkipSundays(today, minLeadTimeDays);
 
     // Map: variantGid → color
     const variantColorMap = new Map();
@@ -372,15 +372,13 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
           // pending Bookings werden ignoriert, da sie noch nicht bestätigt sind
           if (booking.status !== 'confirmed' && booking.status !== 'reserved') return false;
 
-          const eventDate = new Date(booking.event_date); // DB column name
+          const eventDate = new Date(booking.event_date);
           const checkDate = new Date(date);
 
-          const blockedStart = new Date(eventDate);
-          blockedStart.setDate(blockedStart.getDate() - bufferBefore);
-
+          // Buffer ohne Sonntage zählen (gleiche Logik wie calculateBlockedDates)
+          const blockedStart = addDaysSkipSundays(eventDate, -bufferBefore);
           // Chain-Buffer: Am Ende nochmal bufferBefore Tage anhängen
-          const blockedEnd = new Date(eventDate);
-          blockedEnd.setDate(blockedEnd.getDate() + bufferAfter + bufferBefore);
+          const blockedEnd = addDaysSkipSundays(eventDate, bufferAfter + bufferBefore);
 
           return checkDate >= blockedStart && checkDate <= blockedEnd;
         }).length;

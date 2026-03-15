@@ -6,6 +6,7 @@ import {
   datesOverlap,
   getDateRange,
   formatDate,
+  addDaysSkipSundays,
 } from '../utils/dateHelpers.js';
 
 
@@ -484,11 +485,11 @@ class FotoboxInventoryManager {
       const dateRange = getDateRange(startDate, endDate);
       console.log(`[getAvailableDates] Date range has ${dateRange.length} days, first=${dateRange[0]}, last=${dateRange[dateRange.length-1]}`);
 
-      // Vorlaufzeit: Mindestens X Tage im Voraus buchen
+      // Vorlaufzeit: Mindestens X Nicht-Sonntage im Voraus buchen
       const minLeadTimeDays = parseInt(process.env.MIN_LEAD_TIME_DAYS || '4');
-      const minBookingDate = new Date();
-      minBookingDate.setDate(minBookingDate.getDate() + minLeadTimeDays);
-      minBookingDate.setHours(0, 0, 0, 0); // Auf Tagesbeginn setzen
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const minBookingDate = addDaysSkipSundays(today, minLeadTimeDays);
       console.log(`[getAvailableDates] minBookingDate=${formatDate(minBookingDate)} (lead time: ${minLeadTimeDays} days)`);
 
       // Farbe für diese Variante ermitteln
