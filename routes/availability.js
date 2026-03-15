@@ -326,6 +326,9 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     for (const date of unavailableDates) {
       const checkDate = new Date(date);
 
+      // Überspringe Daten innerhalb der Vorlaufzeit
+      if (checkDate < minBookingDate) continue;
+
       // Prüfe ob dieses Datum von Admin gesperrt ist
       const isAdminBlocked = allBlockedDates.some(blockedRange => {
         const blockStart = new Date(blockedRange.start_date);
