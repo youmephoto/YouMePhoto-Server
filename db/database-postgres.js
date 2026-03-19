@@ -10,11 +10,11 @@ const __dirname = path.dirname(__filename);
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  max: 50, // Increased from 20 for better concurrency
-  min: 5, // Keep some connections warm
-  idleTimeoutMillis: 60000, // Keep connections alive longer
-  connectionTimeoutMillis: 5000, // Allow more time for connection
-  allowExitOnIdle: false, // Don't close pool when no queries
+  max: 10,
+  min: 0, // Don't keep idle connections (Railway kills them anyway)
+  idleTimeoutMillis: 10000, // Release idle connections quickly
+  connectionTimeoutMillis: 10000, // More time to establish connection
+  allowExitOnIdle: true,
 });
 
 console.log('[Database] Initializing PostgreSQL connection...');
@@ -65,24 +65,38 @@ try {
 
 // Helper function to convert SQLite-style ? to PostgreSQL $1, $2, etc.
 function query(text, params) {
-  return pool.query(text, params);
+  return poolQuery(text, params);
+}
+
+// Helper: retry a pool query once on connection errors
+async function poolQuery(text, params) {
+  try {
+    return await pool.query(text, params);
+  } catch (err) {
+    if (err.message && (err.message.includes('Connection terminated') || err.message.includes('connection timeout'))) {
+      // One retry after a brief wait
+      await new Promise(r => setTimeout(r, 200));
+      return await pool.query(text, params);
+    }
+    throw err;
+  }
 }
 
 // Get a single row
 async function queryOne(text, params) {
-  const result = await pool.query(text, params);
+  const result = await poolQuery(text, params);
   return result.rows[0] || null;
 }
 
 // Get all rows
 async function queryAll(text, params) {
-  const result = await pool.query(text, params);
+  const result = await poolQuery(text, params);
   return result.rows;
 }
 
 // Execute (for INSERT/UPDATE/DELETE)
 async function execute(text, params) {
-  const result = await pool.query(text, params);
+  const result = await poolQuery(text, params);
   return result;
 }
 
