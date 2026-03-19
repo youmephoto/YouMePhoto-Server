@@ -54,14 +54,27 @@ async function runMigrations() {
   }
 }
 
-// Initialize on startup
-try {
-  await initializeDatabase();
-  await runMigrations();
-} catch (error) {
-  console.error('[Database] Failed to initialize:', error);
-  throw error;
+// Initialize on startup with retry (Railway DB may not be ready immediately)
+async function initializeWithRetry(retries = 5, delayMs = 3000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await initializeDatabase();
+      await runMigrations();
+      console.log('[Database] Initialization complete');
+      return;
+    } catch (error) {
+      console.error(`[Database] Init attempt ${attempt}/${retries} failed:`, error.message);
+      if (attempt < retries) {
+        console.log(`[Database] Retrying in ${delayMs}ms...`);
+        await new Promise(r => setTimeout(r, delayMs));
+      } else {
+        console.error('[Database] All init attempts failed, server will start but DB may be unavailable');
+      }
+    }
+  }
 }
+
+await initializeWithRetry();
 
 // Helper function to convert SQLite-style ? to PostgreSQL $1, $2, etc.
 function query(text, params) {
