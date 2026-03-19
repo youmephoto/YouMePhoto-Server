@@ -320,7 +320,9 @@ async function checkAlternativeColors(currentVariantId, startDate, endDate, avai
     }
 
     // Finde Daten die für aktuelle Farbe NICHT verfügbar sind
-    const unavailableDates = allDates.filter(date => !availableDates.includes(date));
+    // availableDates ist jetzt { date, availableCount }[] – extrahiere nur die Strings
+    const availableDateStrings = availableDates.map(d => d.date || d);
+    const unavailableDates = allDates.filter(date => !availableDateStrings.includes(date));
     console.log(`[Alternative Check] ${allDates.length} dates total, ${availableDates.length} available, ${unavailableDates.length} to check for alternatives`);
 
     // Buffer einmal lesen (nicht in jeder Schleife)

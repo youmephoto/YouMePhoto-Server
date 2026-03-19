@@ -607,13 +607,13 @@ class FotoboxInventoryManager {
         }
 
         if (availableCount > 0) {
-          availableDates.push(date);
+          availableDates.push({ date, availableCount });
         }
       }
 
       console.log(`[getAvailableDates] Results: ${totalChecked} days checked, ${skippedLeadTime} skipped (lead time), ${skippedAdminBlocked} skipped (admin blocked), ${availableDates.length} available dates`);
       if (availableDates.length > 0) {
-        console.log(`[getAvailableDates] First available: ${availableDates[0]}, Last available: ${availableDates[availableDates.length-1]}`);
+        console.log(`[getAvailableDates] First available: ${availableDates[0].date}, Last available: ${availableDates[availableDates.length-1].date}`);
       }
 
       return availableDates;
